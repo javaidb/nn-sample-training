@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  jupyter:
+    build: .
+    image: pytorch-jupyter
+    ports:
+      - "8888:8888"  # Exposes Jupyter notebook on port 8888
+    volumes:
+      - .:/app  # Mounts your local data to the container
+    environment:
+      - JUPYTER_ENABLE_LAB=yes  # Start JupyterLab by default
+    runtime: nvidia  # Use NVIDIA runtime for GPU support
+    restart: always
