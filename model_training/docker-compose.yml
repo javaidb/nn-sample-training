@@ -34,3 +34,23 @@ services:
     command: mlflow ui --host 0.0.0.0
     depends_on:
       - cuda_model_trainer
+
+  model_verification:
+    image: cuda_model_trainer
+    container_name: model_verification
+    build: .
+    restart: "no"
+    volumes:
+      - ../model_verification:/app/model_verification
+      - ../training:/app/training
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    tty: true
+    command: python /app/model_verification/verify_model.py
