@@ -1,1 +1,5 @@
+#Virtual environment
 .venv_nn
+
+#Generated folders
+training/

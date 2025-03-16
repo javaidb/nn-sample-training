@@ -21,7 +21,7 @@ services:
               count: 1
               capabilities: [gpu]
     tty: true
-    command: python /app/model_training/train_model.py
+    command: python /app/model_training/train_model_sample.py
 
   mlflow:
     image: cuda_model_trainer
