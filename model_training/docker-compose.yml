@@ -7,7 +7,6 @@ services:
     restart: "no"
     volumes:
       - ../data:/app/data
-      - ../model_training:/app/model_training
       - ../training:/app/training
 #      - ~/.gitconfig:/root/.gitconfig
 #      - ~/.ssh:/root/.ssh:ro
