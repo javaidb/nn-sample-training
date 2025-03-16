@@ -48,6 +48,7 @@ def objective(trial):
 
         mlflow.log_params(trial.params)
         best_val_loss = float('inf')
+        best_trial_params = None
 
         try:
             for epoch in range(10):
@@ -107,6 +108,14 @@ def objective(trial):
                 # Save best model
                 if avg_val_loss < best_val_loss:
                     best_val_loss = avg_val_loss
+                    best_trial_params = trial.params.copy()
+                    # Save model state dict and architecture parameters
+                    torch.save({
+                        'state_dict': model.state_dict(),
+                        'trial_params': trial.params,
+                        'val_loss': avg_val_loss,
+                        'val_accuracy': val_accuracy
+                    }, "./training/output/best_model.pth")
                     mlflow.pytorch.log_model(model, "best_model")
 
         except RuntimeError as e:
@@ -134,23 +143,40 @@ if __name__ == "__main__":
     # Create output directory
     Path("./training/output").mkdir(parents=True, exist_ok=True)
     
-    # Save best model
-    best_model = build_model(trial)
-    torch.save(best_model.state_dict(), "./training/output/best_model.pth")
+    # Load the best model checkpoint
+    checkpoint = torch.load("./training/output/best_model.pth")
+    print("\nBest model parameters:")
+    for key, value in checkpoint['trial_params'].items():
+        print(f"  {key}: {value}")
+    
+    # Create model with same architecture
+    layers = []
+    in_features = 784
+    params = checkpoint['trial_params']
+    n_layers = params['n_layers']
+    
+    for i in range(n_layers):
+        out_features = params[f'n_units_l{i}']
+        layers.append(nn.Linear(in_features, out_features))
+        layers.append(nn.ReLU())
+        in_features = out_features
+    layers.append(nn.Linear(in_features, 10))
+    
+    best_model = nn.Sequential(*layers)
+    best_model.load_state_dict(checkpoint['state_dict'])
+    print(f"\nLoaded best model:")
+    print(f"  Validation loss: {checkpoint['val_loss']:.4f}")
+    print(f"  Validation accuracy: {checkpoint['val_accuracy']:.2f}%")
     
     # Save study for later analysis
     with mlflow.start_run():
         mlflow.log_params(study.best_trial.params)
         mlflow.log_metric("best_value", study.best_value)
         
-        # Log the best model
-        best_model = build_model(study.best_trial)
-        mlflow.pytorch.log_model(best_model, "best_model")
-        
         # Log the study results as an artifact
         study.trials_dataframe().to_csv("./training/output/optuna_results.csv")
         mlflow.log_artifact("./training/output/optuna_results.csv")
         print(f"Study saved to ./training/output/optuna_results.csv")
 
-        print("To view the Optuna Dashboard, run the following command in your terminal:")
-        print("optuna-dashboard sqlite:///optuna.db")
+        # print("To view the Optuna Dashboard, run the following command in your terminal:")
+        # print("optuna-dashboard sqlite:///optuna.db")
