@@ -11,6 +11,26 @@ import optuna
 from pathlib import Path
 from datetime import datetime
 
+# Dataset constants
+MNIST_MEAN = 0.1307  # Pre-computed mean of MNIST dataset
+MNIST_STD = 0.3081   # Pre-computed standard deviation of MNIST dataset
+INPUT_SIZE = 784     # MNIST image size (28x28 = 784)
+NUM_CLASSES = 10     # Number of digit classes (0-9)
+TRAIN_VAL_SPLIT = 0.8  # 80% training, 20% validation
+
+# Training constants
+BATCH_SIZE = 64
+NUM_WORKERS = 4  # Number of data loading workers
+NUM_EPOCHS = 10
+
+# Model architecture bounds
+MIN_LAYERS = 1
+MAX_LAYERS = 3
+MIN_UNITS = 4
+MAX_UNITS = 128
+MIN_LR = 1e-5
+MAX_LR = 1e-1
+
 now = datetime.now()
 formatted_datetime = now.strftime('%Y%m%d%H%M%S')
 
@@ -19,39 +39,67 @@ mlflow.set_tracking_uri("http://mlflow:5000")
 mlflow.set_experiment("MNIST_Optimization")
 
 def build_model(trial):
-    n_layers = trial.suggest_int("n_layers", 1, 3)
+    n_layers = trial.suggest_int("n_layers", MIN_LAYERS, MAX_LAYERS)
     layers = []
-    in_features = 784
+    in_features = INPUT_SIZE
     for i in range(n_layers):
-        out_features = trial.suggest_int(f"n_units_l{i}", 4, 128)
+        out_features = trial.suggest_int(f"n_units_l{i}", MIN_UNITS, MAX_UNITS)
         layers.append(nn.Linear(in_features, out_features))
         layers.append(nn.ReLU())
         in_features = out_features
-    layers.append(nn.Linear(in_features, 10))
+    layers.append(nn.Linear(in_features, NUM_CLASSES))
     return nn.Sequential(*layers)
 
 def objective(trial):
     with mlflow.start_run(nested=True):
         model = build_model(trial).to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=trial.suggest_loguniform("lr", 1e-5, 1e-1))
+        optimizer = torch.optim.Adam(
+            model.parameters(), 
+            lr=trial.suggest_loguniform("lr", MIN_LR, MAX_LR)
+        )
         criterion = nn.CrossEntropyLoss()
 
         # Split data into train and validation
-        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
-        full_dataset = torchvision.datasets.MNIST(root="./training/data", train=True, download=True, transform=transform)
-        train_size = int(0.8 * len(full_dataset))
-        val_size = len(full_dataset) - train_size
-        train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((MNIST_MEAN,), (MNIST_STD,))
+        ])
         
-        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
-        val_loader = DataLoader(val_dataset, batch_size=64, num_workers=4, pin_memory=True)
+        full_dataset = torchvision.datasets.MNIST(
+            root="./training/data",
+            train=True,
+            download=True,
+            transform=transform
+        )
+        
+        train_size = int(TRAIN_VAL_SPLIT * len(full_dataset))
+        val_size = len(full_dataset) - train_size
+        train_dataset, val_dataset = torch.utils.data.random_split(
+            full_dataset, 
+            [train_size, val_size]
+        )
+        
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=True,
+            num_workers=NUM_WORKERS,
+            pin_memory=True
+        )
+        
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=BATCH_SIZE,
+            num_workers=NUM_WORKERS,
+            pin_memory=True
+        )
 
         mlflow.log_params(trial.params)
         best_val_loss = float('inf')
         best_trial_params = None
 
         try:
-            for epoch in range(10):
+            for epoch in range(NUM_EPOCHS):
                 # Training phase
                 model.train()
                 total_loss = 0
@@ -109,7 +157,7 @@ def objective(trial):
                 if avg_val_loss < best_val_loss:
                     best_val_loss = avg_val_loss
                     best_trial_params = trial.params.copy()
-                    # Save model state dict and architecture parameters
+                    # Save directly to file in addition to MLflow
                     torch.save({
                         'state_dict': model.state_dict(),
                         'trial_params': trial.params,
@@ -126,11 +174,18 @@ def objective(trial):
                 raise optuna.exceptions.TrialPruned()
             raise e
 
-    return best_val_loss  # Return best validation loss instead of last training loss
+    return best_val_loss
 
 if __name__ == "__main__":
-    # Create and run Optuna study with SQLite storage
-    study = optuna.create_study(direction="minimize", storage="sqlite:///optuna.db", study_name=F"mnist_optimization_{formatted_datetime}")
+    # Create output directory
+    Path("./training/output").mkdir(parents=True, exist_ok=True)
+    
+    # Create and run Optuna study
+    study = optuna.create_study(
+        direction="minimize",
+        storage="sqlite:///optuna.db",
+        study_name=f"mnist_optimization_{formatted_datetime}"
+    )
     study.optimize(objective, n_trials=10)
     
     print("Best trial:")
@@ -140,33 +195,32 @@ if __name__ == "__main__":
     for key, value in trial.params.items():
         print(f"    {key}: {value}")
     
-    # Create output directory
-    Path("./training/output").mkdir(parents=True, exist_ok=True)
+    # # LOGGING FOR BEST MODEL ================================    
+    # # Load the best model checkpoint
+    # checkpoint = torch.load("./training/output/best_model.pth")
+    # print("\nBest model parameters:")
+    # for key, value in checkpoint['trial_params'].items():
+    #     print(f"  {key}: {value}")
     
-    # Load the best model checkpoint
-    checkpoint = torch.load("./training/output/best_model.pth")
-    print("\nBest model parameters:")
-    for key, value in checkpoint['trial_params'].items():
-        print(f"  {key}: {value}")
+    # # Create model with same architecture
+    # layers = []
+    # in_features = 784
+    # params = checkpoint['trial_params']
+    # n_layers = params['n_layers']
     
-    # Create model with same architecture
-    layers = []
-    in_features = 784
-    params = checkpoint['trial_params']
-    n_layers = params['n_layers']
+    # for i in range(n_layers):
+    #     out_features = params[f'n_units_l{i}']
+    #     layers.append(nn.Linear(in_features, out_features))
+    #     layers.append(nn.ReLU())
+    #     in_features = out_features
+    # layers.append(nn.Linear(in_features, 10))
     
-    for i in range(n_layers):
-        out_features = params[f'n_units_l{i}']
-        layers.append(nn.Linear(in_features, out_features))
-        layers.append(nn.ReLU())
-        in_features = out_features
-    layers.append(nn.Linear(in_features, 10))
-    
-    best_model = nn.Sequential(*layers)
-    best_model.load_state_dict(checkpoint['state_dict'])
-    print(f"\nLoaded best model:")
-    print(f"  Validation loss: {checkpoint['val_loss']:.4f}")
-    print(f"  Validation accuracy: {checkpoint['val_accuracy']:.2f}%")
+    # best_model = nn.Sequential(*layers)
+    # best_model.load_state_dict(checkpoint['state_dict'])
+    # print(f"\nLoaded best model:")
+    # print(f"  Validation loss: {checkpoint['val_loss']:.4f}")
+    # print(f"  Validation accuracy: {checkpoint['val_accuracy']:.2f}%")
+    # # =========================================================
     
     # Save study for later analysis
     with mlflow.start_run():
